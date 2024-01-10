@@ -1,40 +1,48 @@
-const axios = require('axios');
-const fs = require('fs');
-const XLSX = require('xlsx');
-/*
-function findCategoryById(categories, id) {
-  for (const category of categories) {
-    if (category.$ && category.$.id === id) {
-      return category._;
-    }
-  }
-  return null;
-}
-*/
+import axios from 'axios';
+import XLSX from 'xlsx';
+//import { logger } from './logger/index.js';
+import { sequelize } from './models/sequelize.js';
+import { createNewName, findZrNameById } from './models/zrNames.js';
+import { findZdorovaPriceByDrugPharmacy, createNewZrPrice, updateZrPrice, findALLZrPrices } from './models/zrPrice.js';
 
-let csvData = [[
-  'id',
-  'drug_id',
-  'drug_name',
-  'drug_producer',
-  'pharmacy_id',
-  'pharmacy_name',
-  'pharmacy_region',
-  'pharmacy_address',
-  'price',
-  'availability_status',
-  'created_at',
-]];
+const main = async () => {
+  const models = {
+      list:  [
+          'zrNames'
+      ]
+  };
+  // DB
+  const configTables = models.list;
+  const dbInterface = sequelize.getQueryInterface();
+  try {
+    const checks = await Promise.all(configTables.map(configTable => {
+        return dbInterface.tableExists(configTable);
+    }));
+    const result = checks.every(el => el === true);
+    if (!result) {
+        // eslint-disable-next-line no-console
+        console.error(`🚩 Failed to check DB tables`);
+        throw (`Some DB tables are missing`);
+    }
+  } catch (error) {
+    console.error(`🚩 egfrsgs ${error}` );
+
+  }
+  
+
+}; 
+
+main();
 
 
 const getApiData = async(search) => {
   try {
     const response = await axios.get(`https://zr.in.ua/product/${search}/prices`);
+    if (response.status === 404) return false;
     return response.data.data;
   } catch (error) {
-    console.error('Помилка при отриманні XML: ', error);
-    return
-    throw error;
+    console.error('Помилка при отриманні XML: ', error.code);
+    return false;
   }
 }
 
@@ -48,11 +56,8 @@ function textBeforeComma(text) {
   return text.split(",");
 }
 
-
+/*
 function convertArrayToSheet(APIdata) {
-  if (APIdata == undefined) {
-    return
-  }
   if (APIdata.prices.other[0] == undefined) {
     return
   }
@@ -83,18 +88,6 @@ function convertArrayToSheet(APIdata) {
 
 
 
-function writeArrayToXLS(arrayData, xlsFilePath) {
-  try {
-    const workbook = XLSX.utils.book_new();
-    const sheetName = 'Sheet1';
-    const worksheet = XLSX.utils.aoa_to_sheet(arrayData);
-    XLSX.utils.book_append_sheet(workbook, worksheet, sheetName);
-    XLSX.writeFile(workbook, xlsFilePath);
-    console.log('Масив успішно записано в XLS.');
-  } catch (error) {
-    console.error('Помилка під час запису масиву в XLS:', error);
-  }
-}
 
 async function run() {
   try {
@@ -112,67 +105,164 @@ async function run() {
 }
 
 run();
-/*
-bot.on('message', async (msg) => {
-  const chatId = msg.chat.id;
-  const filePath = './price.xls';
-  if(msg.text === 'all') {
-    await run();
-    fs.access('./price.xls', fs.constants.F_OK, (err) => {
-      if (err) {
-        bot.sendMessage(chatId, 'Файл price.xls не знайдено!');
-        return;
-      }
-      bot.sendMessage(chatId, 'Доброго ранку до вашого ознайомлення свіжий прайс.');
-      bot.sendDocument(chatId, filePath)
-        .catch((error) => {
-          bot.sendMessage(chatId, 'Виникла помилка під час відправлення файлу.');
-          console.error(error);
-      });
-    });
-  }
-});
 */
-/*
-const sendMorningMessage = async () => {
+
+
+const generateNumbers = async () => {
   try {
-    const chatId = '@mmarketkiev'; 
-    await run();
-    fs.access('./price.xls', fs.constants.F_OK, (err) => {
-      if (err) {
-        bot.sendMessage(chatId, 'Файл price.xls не знайдено!');
-        return;
-      }
-      bot.sendMessage(chatId, 'Доброго ранку до вашого ознайомлення свіжий прайс.');
-      bot.sendDocument(chatId, './price.xls', { 
-        reply_markup: { 
-          inline_keyboard: [[
-            { 
-              text: 'Для замовлення або запитань перейдіть в чат з менеджером',
-              url: 'https://t.me/mmarketkiev_bot',
-            }
-          ]]
-        }})
-        .catch((error) => {
-          bot.sendMessage(chatId, 'Виникла помилка під час відправлення файлу.');
-          console.error(error);
-      });
-    });
-    console.log('Повідомлення надіслано успішно.');
+    for (let i = 24466; i <= 34376; i++) { 
+        console.log(i) 
+        const xml = await getApiData(i);
+        if (xml) {
+          createNewName({
+            drug_name: xml.product.name,
+            drug_id: i,
+          })
+
+        }
+    }
+  
   } catch (error) {
-    console.error('Помилка при надсиланні повідомлення:', error.message);
+    console.error('Помилка: ', error);
   }
-};
-*/
+}
+
+generateNumbers();
 /*
-const checkAndSendMorningMessage = () => {
-  const now = new Date();
-  const kievTimeZoneOffset = 3;
-
-  if (now.getUTCHours() === 9 - kievTimeZoneOffset && now.getUTCMinutes() === 0) {
-    sendMorningMessage();
+const writeArrayToXLS = (arrayData, xlsFilePath) => {
+  try {
+    const maxRowsPerSheet = 50000;
+    const sheets = [];
+    let count = 1;
+    
+    for(let i = 0; i < arrayData.length; i += maxRowsPerSheet) {
+      const chunk = arrayData.slice(i, i + maxRowsPerSheet);
+      const sheetName = `PART_${count++}`; 
+      
+      const worksheet = XLSX.utils.aoa_to_sheet(chunk);
+      sheets.push({name: sheetName, worksheet});
+    }
+    
+    const workbook = XLSX.utils.book_new();
+    
+    sheets.forEach(sheet => {
+      XLSX.utils.book_append_sheet(workbook, sheet.worksheet, sheet.name); 
+    });
+    
+    XLSX.writeFile(workbook, sharedFolderPath + xlsFilePath);
+    console.log(sheets.length, arrayData.length, xlsFilePath)
+    
+    logger.info(`Записано ${sheets.length} частин, ${arrayData.length} элементів в ${xlsFilePath.slice(0, 9)}`);
+    console.log('Масив успішно записано в XLS.');
+  } catch (error) {
+    logger.warn(`Масив: ${arrayData.length} Шлях: ${xlsFilePath} Помилка під час запису масиву в XLS:`, error)
+    console.error('Помилка під час запису масиву в XLS:', error);
   }
+}
+
+async function run() {
+  
+  try {
+    await runZdorova();
+    let csvDataZr = [[
+      'id',
+      'drug_id',
+      'drug_name',
+      'drug_producer',
+      'pharmacy_id',
+      'pharmacy_name',
+      'pharmacy_region',
+      'pharmacy_address',
+      'price',
+      'availability_status',
+      'updated_at',
+    ]];    
+    const dataArrayZr = await findALLZrPrices();
+    for (const el of dataArrayZr) {
+      csvDataZr.push([
+        el.id,
+        el.drug_id,
+        el.drug_name,
+        el.drug_producer,
+        el.pharmacy_id,
+        el.pharmacy_name,
+        el.pharmacy_region,
+        el.pharmacy_address,
+        el.price,
+        el.availability_status,
+        el.updatedAt
+      ])
+    }
+    const date = new Date();
+    const filename = date.toISOString().replace(/T/g, "_").replace(/:/g, "-");
+    console.log(`Довжина здорова родина:${csvDataZr.length}`);
+    writeArrayToXLS(csvDataZr, `priceZdorova${filename}.xls`);
+  } catch (error) {
+    console.error('Помилка здорова родина: ', error);
+  }
+  run();
 };
 
-setInterval(checkAndSendMorningMessage, 60000);
+run();
+
+
+const runZdorova = async () => {
+  for (let i = 1; i === 2; i++) {
+    if (i % 1000 === 0) {
+      logger.info(`Здорова обробляє елемент #${i}`)
+    }
+    const zrName = await findZrNameById(i);
+    const data = await getApiData(zrName.drug_id);
+    if (data) {
+      if (data.prices.other.length > 0) {
+        const otherCities = data.prices.other;
+        for (const el of otherCities) {
+          const element = await findZdorovaPriceByDrugPharmacy(zrName.drug_id, el.pharmacy_id);
+          if (element) {
+            await updateZrPrice(element.id, el.price);
+          } else {
+            const location = textBeforeComma(el.pharmacy.address);
+            await createNewZrPrice({
+              drug_id: el.product_id,
+              drug_name: data.product.name,
+              drug_producer: '',
+              pharmacy_id: el.pharmacy_id,
+              pharmacy_name: el.pharmacy.title,
+              pharmacy_region: location[0],
+              pharmacy_address: location[1],
+              price: el.price_old,
+              availability_status: 'Забронювати',
+            })  
+          }
+        }
+        
+
+      }
+      if (data.prices.current_city.length > 0) {
+        const current_city = data.prices.other;
+        for (const el of current_city) {
+          const element = await findZdorovaPriceByDrugPharmacy(zrName.drug_id, el.pharmacy_id);
+          if (element) {
+            await updateZrPrice(element.id, el.price);
+          } else {
+            const location = textBeforeComma(el.pharmacy.address);
+            await createNewZrPrice({
+              drug_id: el.product_id,
+              drug_name: data.product.name,
+              drug_producer: '',
+              pharmacy_id: el.pharmacy_id,
+              pharmacy_name: el.pharmacy.title,
+              pharmacy_region: location[0],
+              pharmacy_address: location[1],
+              price: el.price_old,
+              availability_status: 'Забронювати',
+            })  
+          }
+        }
+      }
+    }
+  }
+}
+
 */
+
